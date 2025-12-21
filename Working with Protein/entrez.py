@@ -4,7 +4,7 @@ from Bio import SeqIO
 def retrieve_prot_sequence(protein_id):
     
     # Set email (mandatory for Entrez)
-    Entrez.email = "nguyuling@gmail.com"
+    Entrez.email = "nguyuling@graduate.utm.my"
     
     # Fetch protein
     handle = Entrez.efetch(

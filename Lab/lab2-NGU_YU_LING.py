@@ -6,9 +6,9 @@ import py3Dmol
 import os
 import tempfile
 import pandas as pd
+from stmol import showmol
 
 # Retrieve and Parse the Protein Structure
-@st.cache_data
 def get_protein_structure(protID):
 
     # Create a temporary directory to download the PDB file to
@@ -17,23 +17,18 @@ def get_protein_structure(protID):
         pdb_list = PDBList()
         parser = PDBParser()
 
-        try:
-            # Download the PDB file (returns the local path)
-            protID_upper = protID.upper()
-            file_path = pdb_list.retrieve_pdb_file(
-                protID_upper, 
-                pdir=temp_dir, 
-                file_format='pdb'
-            )
-            
-            # Parse the structure from the file
-            structure = parser.get_structure(protID_upper, file_path)
-            return structure
-            
-        except Exception as e:
-            st.error(f"Error retrieving/parsing PDB ID '{protID}'. Check if the ID is valid.")
-            st.error(f"Detailed error: {e}")
-            return None
+        # Download the PDB file (returns the local path)
+        protID_upper = protID.upper()
+        file_path = pdb_list.retrieve_pdb_file(
+            protID_upper, 
+            pdir=temp_dir, 
+            file_format='pdb'
+        )
+        
+        # Parse the structure from the file
+        structure = parser.get_structure(protID_upper, file_path)
+        return structure
+
 
 # Calculate Structural Properties and Create 3D View ---
 def get_structure_info(prot_structure):
@@ -68,23 +63,21 @@ def get_structure_info(prot_structure):
 
 
 def create_py3dmol_view(prot_structure):
-    """Creates an interactive 3D viewer component for Streamlit."""
-    
+        
     # Extract the PDB ID from the structure object for py3Dmol query
     pdb_id = prot_structure.get_id()
     
     # Initialize the py3Dmol view
     view = py3Dmol.view(
         query=f'pdb:{pdb_id}', 
-        width=800, 
-        height=500,
-        viewer=(500, 500)
+        width=450, 
+        height=500
     )
     
     # Set display style
     view.setStyle({'cartoon': {'color': 'spectrum'}})
     view.zoomTo()
-    return st.py3dmol(view, height=500, width=800)
+    return view
 
 
 # Streamlit Application Layout
@@ -95,7 +88,7 @@ def app():
         initial_sidebar_state="expanded"
     )
     
-    st.title("🔬 Protein Structure Analyzer (PDB)")
+    st.title("Protein Structure Analyzer (PDB)")
     st.markdown("Enter a valid 4-character PDB ID to retrieve and analyze the protein structure. Calculations include the Center of Mass (COM) and Radius of Gyration ($R_g$).")
     
     # Input field and button
@@ -147,7 +140,7 @@ def app():
 
             # Display 3D View
             st.subheader("3D Visualization")
-            results['3dview'] # This displays the py3Dmol component
+            showmol(results['3dview'])
 
 if __name__ == "__main__":
     app()

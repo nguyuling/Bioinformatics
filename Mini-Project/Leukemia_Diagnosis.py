@@ -35,7 +35,6 @@ st.markdown("""
 <style>
     .main-header {
         color: #1f77b4;
-        text-align: center;
         font-size: 2.5em;
         font-weight: bold;
     }
@@ -44,6 +43,7 @@ st.markdown("""
         font-size: 1.8em;
         font-weight: bold;
         margin-top: 30px;
+        text-align: center;
     }
     .metric-card {
         background-color: #f0f2f6;
@@ -257,14 +257,18 @@ def plot_gene_expression_distribution(features_df):
 
 def plot_model_comparison(metrics):
     models_list = list(metrics.keys())
+    train_r2 = [metrics[m]['train_r2'] for m in models_list]
     test_r2 = [metrics[m]['test_r2'] for m in models_list]
+    train_mse = [metrics[m]['train_mse'] for m in models_list]
     test_mse = [metrics[m]['test_mse'] for m in models_list]
-    fig = make_subplots(rows=1, cols=2, subplot_titles=('Test R² Scores', 'Test MSE Scores'))
-    fig.add_trace(go.Bar(x=models_list, y=test_r2, name='R² Score', marker_color='rgb(31, 119, 180)'), row=1, col=1)
-    fig.add_trace(go.Bar(x=models_list, y=test_mse, name='MSE', marker_color='rgb(255, 127, 14)'), row=1, col=2)
+    fig = make_subplots(rows=1, cols=2, subplot_titles=('R² Scores', 'MSE Scores'))
+    fig.add_trace(go.Bar(x=models_list, y=train_r2, name='Train R²', marker_color='rgb(31, 119, 180)'), row=1, col=1)
+    fig.add_trace(go.Bar(x=models_list, y=test_r2, name='Test R²', marker_color='rgb(158, 202, 225)'), row=1, col=1)
+    fig.add_trace(go.Bar(x=models_list, y=train_mse, name='Train MSE', marker_color='rgb(255, 127, 14)'), row=1, col=2)
+    fig.add_trace(go.Bar(x=models_list, y=test_mse, name='Test MSE', marker_color='rgb(255, 187, 120)'), row=1, col=2)
     fig.update_xaxes(tickangle=-45, row=1, col=1)
     fig.update_xaxes(tickangle=-45, row=1, col=2)
-    fig.update_layout(height=400, template='plotly_white', showlegend=False)
+    fig.update_layout(height=400, template='plotly_white', showlegend=True, barmode='group')
     return fig
 
 def plot_predictions_vs_actual(y_test, y_pred, model_name):
@@ -299,8 +303,8 @@ def plot_predictions_vs_actual(y_test, y_pred, model_name):
 #! MAIN
 def main():
     # header
-    st.markdown('<h1 class="main-header">🔬 Leukemia Diagnosis System</h1>', unsafe_allow_html=True)
-    st.markdown("""A machine learning application for classifying leukemia types using gene expression data from the GEO dataset GSE13164.""")
+    st.markdown('<h1 class="main-header">Leukemia Diagnosis System</h1>', unsafe_allow_html=True)
+    st.markdown("""A machine learning application for classifying leukemia types using gene expression data from the GEO dataset GSE13164.</div>""", unsafe_allow_html=True)
     
     # sidebar
     st.sidebar.markdown("## Navigation")
@@ -308,7 +312,7 @@ def main():
     
     # home page
     if page == "Home":
-        st.markdown('<h2 class="section-header">Welcome</h2>', unsafe_allow_html=True)
+        st.divider()
         col1, col2 = st.columns(2)
         
         with col1:
@@ -420,17 +424,17 @@ def main():
         
         # desc stats
         st.markdown("### Descriptive Statistics")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Overall Gene Expression Statistics**")
-            st.dataframe(features_df.describe())
-        with col2:
-            st.write("**Statistics by Leukemia Type**")
-            combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(features_df, how='inner')
-            for ltype in TARGET:
+        st.write("**Overall Gene Expression Statistics**")
+        st.dataframe(features_df.describe())
+        
+        st.write("**Statistics by Leukemia Type**")
+        combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(features_df, how='inner')
+        cols = st.columns(4)
+        for idx, ltype in enumerate(TARGET):
+            with cols[idx]:
                 st.write(f"**{ltype}**")
                 type_data = combined_df[combined_df['Leukemia_Type'] == ltype].drop('Leukemia_Type', axis=1)
-                st.write(type_data.describe().loc[['mean', 'std', 'min', 'max']].iloc[:, :3])
+                st.dataframe(type_data.describe().loc[['mean', 'std', 'min', 'max']])
         
         # ge dist
         st.markdown("### Gene Expression Distribution")
@@ -439,17 +443,18 @@ def main():
         
         # corr analysis
         st.markdown("### Correlation Analysis")
-        st.write("Computing correlations (this may take a moment)...")
         combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(features_df, how='inner')
-        selected_ltype = st.selectbox("Select Leukemia Type:", TARGET)
-        type_data = combined_df[combined_df['Leukemia_Type'] == selected_ltype].drop('Leukemia_Type', axis=1)
-        
-        # top genes by variance
-        top_genes = type_data.var().nlargest(15).index.tolist()
-        corr_matrix = type_data[top_genes].corr()
-        fig = go.Figure(data=go.Heatmap(z=corr_matrix.values, x=top_genes, y=top_genes, colorscale='RdBu'))
-        fig.update_layout(title=f'Gene Correlation Matrix - {selected_ltype} (Top 15 Genes)', height=600)
-        st.plotly_chart(fig, use_container_width=True)
+        # top 15 genes by variance across entire dataset
+        overall_variance = features_df.var().nlargest(15)
+        top_genes = overall_variance.index.tolist()
+        cols = st.columns(2)
+        for idx, ltype in enumerate(TARGET):
+            with cols[idx % 2]:
+                type_data = combined_df[combined_df['Leukemia_Type'] == ltype].drop('Leukemia_Type', axis=1)
+                corr_matrix = type_data[top_genes].corr()
+                fig = go.Figure(data=go.Heatmap(z=corr_matrix.values[::-1], x=top_genes, y=top_genes[::-1], colorscale='RdBu_r', zmin=-1, zmax=1))
+                fig.update_layout(title=f'{ltype} (Top 15 Genes)', height=500)
+                st.plotly_chart(fig, use_container_width=True)
     
     # model training page
     elif page == "Model Training":
@@ -470,31 +475,36 @@ def main():
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
         
-        if st.button("Train All Models"):
-            with st.spinner("Training models. This may take a moment..."):
-                models, predictions, metrics = train_models(
-                    X_train_scaled, X_test_scaled, y_train, y_test
-                )
-                st.session_state.models = models
-                st.session_state.predictions = predictions
-                st.session_state.metrics = metrics
-                st.session_state.X_test = X_test
-                st.session_state.y_test = y_test
-                st.session_state.scaler = scaler
-                st.success("Model training completed!")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Train All Models"):
+                with st.spinner("Training models. This may take a moment..."):
+                    models, predictions, metrics = train_models(
+                        X_train_scaled, X_test_scaled, y_train, y_test
+                    )
+                    st.session_state.models = models
+                    st.session_state.predictions = predictions
+                    st.session_state.metrics = metrics
+                    st.session_state.X_test = X_test
+                    st.session_state.y_test = y_test
+                    st.session_state.scaler = scaler
+                    st.success("Model training completed!")
+        with col2:
+            if st.button("Clear Cache & Retrain"):
+                st.cache_resource.clear()
+                st.rerun()
         
         if 'metrics' in st.session_state:
             st.markdown("### Model Performance Comparison")
             metrics = st.session_state.metrics
-            
             comparison_data = []
             for model_name, metric in metrics.items():
                 comparison_data.append({
                     'Model': model_name,
-                    'Train MSE': metric['train_mse'],
-                    'Test MSE': metric['test_mse'],
                     'Train R²': metric['train_r2'],
-                    'Test R²': metric['test_r2']
+                    'Test R²': metric['test_r2'],
+                    'Train MSE': metric['train_mse'],
+                    'Test MSE': metric['test_mse']
                 })
             
             comparison_df = pd.DataFrame(comparison_data)
@@ -520,20 +530,13 @@ def main():
             
             # models analysis
             st.markdown("### Individual Model Analysis")
-            selected_model = st.selectbox("Select a model to analyze:", 
-                                         list(st.session_state.metrics.keys()))
-            
-            y_pred = st.session_state.predictions[selected_model]
             y_test = st.session_state.y_test
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Test MSE", f"{st.session_state.metrics[selected_model]['test_mse']:.6f}")
-            with col2:
-                st.metric("Test R²", f"{st.session_state.metrics[selected_model]['test_r2']:.6f}")
-            
-            fig = plot_predictions_vs_actual(y_test, y_pred, selected_model)
-            st.plotly_chart(fig, use_container_width=True)
+            cols = st.columns(2)
+            for idx, selected_model in enumerate(st.session_state.metrics.keys()):
+                with cols[idx % 2]:
+                    y_pred = st.session_state.predictions[selected_model]
+                    fig = plot_predictions_vs_actual(y_test, y_pred, selected_model)
+                    st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Click 'Train All Models' to start training.")
     

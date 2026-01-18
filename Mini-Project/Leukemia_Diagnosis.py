@@ -17,6 +17,7 @@ import os
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler, PolynomialFeatures
 from sklearn.linear_model import Ridge
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, accuracy_score, confusion_matrix, classification_report
@@ -186,14 +187,14 @@ def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
         'test_r2': r2_score(y_test, y_pred_test)
     }
     
-    # model 2: ridge
-    model_ridge = Ridge(alpha=1.0)
-    model_ridge.fit(X_train_scaled, y_train)
-    y_pred_train = model_ridge.predict(X_train_scaled)
-    y_pred_test = model_ridge.predict(X_test_scaled)
-    models['Ridge'] = model_ridge
-    predictions['Ridge'] = y_pred_test
-    metrics['Ridge'] = {
+    # model 2: random forest
+    model_rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model_rf.fit(X_train_scaled, y_train)
+    y_pred_train = model_rf.predict(X_train_scaled)
+    y_pred_test = model_rf.predict(X_test_scaled)
+    models['Random Forest'] = model_rf
+    predictions['Random Forest'] = y_pred_test
+    metrics['Random Forest'] = {
         'train_mse': mean_squared_error(y_train, y_pred_train),
         'test_mse': mean_squared_error(y_test, y_pred_test),
         'train_r2': r2_score(y_train, y_pred_train),
@@ -307,7 +308,7 @@ def main():
     st.markdown("""A machine learning application for classifying leukemia types using gene expression data from the GEO dataset GSE13164.</div>""", unsafe_allow_html=True)
     
     # sidebar
-    st.sidebar.markdown("## Navigation")
+    st.sidebar.markdown("## Welcome")
     page = st.sidebar.radio("Select a page:", ["Home", "Data Loading", "Exploratory Analysis", "Model Training", "Predictions & Diagnosis"])
     
     # home page
@@ -318,7 +319,7 @@ def main():
         with col1:
             st.markdown("""
                 ### About This Application
-                This Streamlit application provides a complete pipeline for leukemia diagnosis:
+                This application provides a complete pipeline for leukemia diagnosis:
                 - **Data Processing**: Load and preprocess GEO dataset GSE13164
                 - **EDA**: Explore gene expression patterns
                 - **Model Training**: Train and compare multiple ML models
@@ -338,7 +339,6 @@ def main():
                 - Gene expression analysis
                 - Multiple ML model comparison
                 - Real-time predictions
-                - Interactive visualizations
                 
                 ### Dataset Information
                 - **Source**: GEO (Gene Expression Omnibus)
@@ -499,12 +499,19 @@ def main():
             metrics = st.session_state.metrics
             comparison_data = []
             for model_name, metric in metrics.items():
+                # Calculate stability score: prioritize test R² while penalizing overfitting (train-test gap)
+                r2_gap = abs(metric['train_r2'] - metric['test_r2'])
+                stability_score = metric['test_r2'] - (0.2 * r2_gap)
+                
                 comparison_data.append({
                     'Model': model_name,
                     'Train R²': metric['train_r2'],
                     'Test R²': metric['test_r2'],
+                    'R² Gap': r2_gap,
                     'Train MSE': metric['train_mse'],
-                    'Test MSE': metric['test_mse']
+                    'Test MSE': metric['test_mse'],
+                    'MSE Gap': abs(metric['train_mse'] - metric['test_mse']),
+                    'Stability Score': stability_score
                 })
             
             comparison_df = pd.DataFrame(comparison_data)
@@ -514,11 +521,12 @@ def main():
             fig = plot_model_comparison(metrics)
             st.plotly_chart(fig, use_container_width=True)
             
-            # best model
+            # best model selection - using both test performance and generalization
             best_r2_idx = comparison_df['Test R²'].idxmax()
             best_mse_idx = comparison_df['Test MSE'].idxmin()
+            best_stability_idx = comparison_df['Stability Score'].idxmax()
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Best Test R²", 
                          comparison_df.loc[best_r2_idx, 'Model'],
@@ -527,6 +535,25 @@ def main():
                 st.metric("Best Test MSE",
                          comparison_df.loc[best_mse_idx, 'Model'],
                          f"{comparison_df.loc[best_mse_idx, 'Test MSE']:.4f}")
+            with col3:
+                st.metric("Best Stability", 
+                         comparison_df.loc[best_stability_idx, 'Model'],
+                         f"{comparison_df.loc[best_stability_idx, 'Stability Score']:.4f}")
+            
+            # Explanation of stability score
+            with st.expander("What is Stability Score?"):
+                st.write("""
+                The **Stability Score** combines two important aspects of model performance:
+                - **Test R²**: How well the model performs on unseen data (higher is better)
+                - **R² Gap**: The difference between training and testing R² (lower is better, indicates less overfitting)
+                
+                Formula: `Stability Score = Test R² - (0.2 × |Train R² - Test R²|)`
+                
+                This metric helps identify models that generalize well without overfitting. 
+                A model with high test R² but large gap indicates overfitting, while a model 
+                with consistent performance across train and test sets is more reliable.
+                """)
+
             
             # models analysis
             st.markdown("### Individual Model Analysis")

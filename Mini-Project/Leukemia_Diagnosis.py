@@ -61,7 +61,7 @@ LABEL = "GSE13164_cleaned_labels.csv"
 TARGET = ['ALL', 'AML', 'CLL', 'CML']
 FEATURE_IDENTIFIER = 'GB_ACC'
 
-# data processing
+#! DATA PROCESSING
 @st.cache_data
 def download_and_parse_geo(gse_id): 
     with st.spinner(f"Downloading GEO dataset {gse_id}..."):
@@ -79,19 +79,18 @@ def download_and_parse_geo(gse_id):
 def extract_and_filter_samples(gse):
     metadata_list = []
     sample_dfs = []
-    
     for name, gsm in gse.gsms.items():
         characteristics = ' '.join(gsm.metadata.get('characteristics_ch1', [''])).lower()
-        
+        # leukemia_type
         leukemia_type = next((t for t in TARGET if t.lower() in characteristics), None)
         if not leukemia_type:
             continue
-            
+        # id_ref 
         metadata_list.append({'Sample_ID': name, 'Leukemia_Type': leukemia_type})
         gsm_df = gsm.table.copy()
         if 'ID_REF' not in gsm_df.columns:
             continue
-        
+        # value_col
         value_col = next((col for col in gsm_df.columns 
                          if col.upper() in ['VALUE', 'LOG_RATIO', 'SIGNAL', 'AVG_SIGNAL']), None)
         if not value_col:
@@ -99,48 +98,38 @@ def extract_and_filter_samples(gse):
             value_col = non_id_cols[-1] if non_id_cols else None
         if not value_col:
             continue
-        
+        # store and append
         gsm_df = gsm_df[['ID_REF', value_col]].rename(columns={value_col: name})
         sample_dfs.append(gsm_df)
-    
     return sample_dfs, pd.DataFrame(metadata_list)
 
 @st.cache_data
-
 def merge_expression_data(sample_dfs):
-    expression_data = reduce(lambda left, right: pd.merge(left, right, on='ID_REF', how='inner'), 
-                           sample_dfs)
+    expression_data = reduce(lambda left, right: pd.merge(left, right, on='ID_REF', how='inner'), sample_dfs)
     expression_data = expression_data.set_index('ID_REF')
     return expression_data
 
 @st.cache_data
 def annotate_and_aggregate_features(expression_data, gpl_table):
     annotation_cols = ['ID', FEATURE_IDENTIFIER]
-    annotation_df = gpl_table[annotation_cols].rename(columns={'ID': 'ID_REF', 
-                                                                FEATURE_IDENTIFIER: 'Feature_ID'})
-    
+    annotation_df = gpl_table[annotation_cols].rename(columns={'ID': 'ID_REF', FEATURE_IDENTIFIER: 'Feature_ID'})
     annotation_df.dropna(subset=['Feature_ID'], inplace=True)
     annotation_df = annotation_df[annotation_df['Feature_ID'].str.strip() != '---']
     annotation_df['Feature_ID'] = annotation_df['Feature_ID'].apply(
         lambda x: x.split(' // ')[0].strip()
     )
-    
     merged_df = pd.merge(expression_data.reset_index(), annotation_df, on='ID_REF', how='inner')
     merged_df.dropna(subset=['Feature_ID'], inplace=True)
-    
     sample_cols = [col for col in merged_df.columns if col.startswith('GSM')]
     final_features_df = merged_df.groupby('Feature_ID')[sample_cols].mean()
     final_features_df = final_features_df.T
-    
     return final_features_df
 
 @st.cache_data
 def align_and_encode_labels(final_features_df, metadata_df):
     metadata_df = metadata_df.set_index('Sample_ID').loc[final_features_df.index.tolist()].reset_index()
-    
     le = LabelEncoder()
     metadata_df['Target_Code'] = le.fit_transform(metadata_df['Leukemia_Type'])
-    
     return final_features_df, metadata_df, le
 
 @st.cache_data
@@ -173,8 +162,7 @@ def load_local_data():
     except FileNotFoundError:
         return None, None, None
 
-# ==================== MODEL TRAINING FUNCTIONS ====================
-
+#! MODEL TRAINING
 @st.cache_resource
 def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
     models = {}
@@ -189,7 +177,6 @@ def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
     poly_pipeline.fit(X_train_scaled, y_train)
     y_pred_train = poly_pipeline.predict(X_train_scaled)
     y_pred_test = poly_pipeline.predict(X_test_scaled)
-    
     models['Polynomial (deg=2)'] = poly_pipeline
     predictions['Polynomial (deg=2)'] = y_pred_test
     metrics['Polynomial (deg=2)'] = {
@@ -204,7 +191,6 @@ def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
     model_ridge.fit(X_train_scaled, y_train)
     y_pred_train = model_ridge.predict(X_train_scaled)
     y_pred_test = model_ridge.predict(X_test_scaled)
-    
     models['Ridge'] = model_ridge
     predictions['Ridge'] = y_pred_test
     metrics['Ridge'] = {
@@ -232,10 +218,8 @@ def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
     )
     
     model_nn.fit(X_train_scaled, y_train)
-    
     y_pred_train = model_nn.predict(X_train_scaled)
     y_pred_test = model_nn.predict(X_test_scaled)
-    
     models['Neural Network'] = model_nn
     predictions['Neural Network'] = y_pred_test
     metrics['Neural Network'] = {
@@ -247,7 +231,7 @@ def train_models(X_train_scaled, X_test_scaled, y_train, y_test):
     
     return models, predictions, metrics
 
-# visualization
+#! VISUALIZATION
 def plot_class_distribution(labels_df):
     fig = px.bar(
         labels_df['Leukemia_Type'].value_counts().reset_index(),
@@ -275,26 +259,12 @@ def plot_model_comparison(metrics):
     models_list = list(metrics.keys())
     test_r2 = [metrics[m]['test_r2'] for m in models_list]
     test_mse = [metrics[m]['test_mse'] for m in models_list]
-    
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=('Test R² Scores', 'Test MSE Scores')
-    )
-    
-    fig.add_trace(
-        go.Bar(x=models_list, y=test_r2, name='R² Score', marker_color='rgb(31, 119, 180)'),
-        row=1, col=1
-    )
-    
-    fig.add_trace(
-        go.Bar(x=models_list, y=test_mse, name='MSE', marker_color='rgb(255, 127, 14)'),
-        row=1, col=2
-    )
-    
+    fig = make_subplots(rows=1, cols=2, subplot_titles=('Test R² Scores', 'Test MSE Scores'))
+    fig.add_trace(go.Bar(x=models_list, y=test_r2, name='R² Score', marker_color='rgb(31, 119, 180)'), row=1, col=1)
+    fig.add_trace(go.Bar(x=models_list, y=test_mse, name='MSE', marker_color='rgb(255, 127, 14)'), row=1, col=2)
     fig.update_xaxes(tickangle=-45, row=1, col=1)
     fig.update_xaxes(tickangle=-45, row=1, col=2)
     fig.update_layout(height=400, template='plotly_white', showlegend=False)
-    
     return fig
 
 def plot_predictions_vs_actual(y_test, y_pred, model_name):
@@ -326,78 +296,61 @@ def plot_predictions_vs_actual(y_test, y_pred, model_name):
     
     return fig
 
-# main
+#! MAIN
 def main():
     # header
     st.markdown('<h1 class="main-header">🔬 Leukemia Diagnosis System</h1>', unsafe_allow_html=True)
-    st.markdown("""
-    A machine learning application for classifying leukemia types using gene expression data
-    from the GEO dataset GSE13164.
-    """)
+    st.markdown("""A machine learning application for classifying leukemia types using gene expression data from the GEO dataset GSE13164.""")
     
     # sidebar
     st.sidebar.markdown("## Navigation")
-    page = st.sidebar.radio(
-        "Select a page:",
-        ["Home", "Data Loading", "Exploratory Analysis", "Model Training", "Predictions & Diagnosis"]
-    )
+    page = st.sidebar.radio("Select a page:", ["Home", "Data Loading", "Exploratory Analysis", "Model Training", "Predictions & Diagnosis"])
     
     # home page
     if page == "Home":
         st.markdown('<h2 class="section-header">Welcome</h2>', unsafe_allow_html=True)
-        
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("""
-            ### About This Application
-            
-            This Streamlit application provides a complete pipeline for leukemia diagnosis:
-            
-            - **Data Processing**: Load and preprocess GEO dataset GSE13164
-            - **EDA**: Explore gene expression patterns
-            - **Model Training**: Train and compare multiple ML models
-            - **Diagnosis**: Classify leukemia types from gene expression data
-            
-            ### Leukemia Types
-            
-            - **ALL** (Acute Lymphoblastic Leukemia)
-            - **AML** (Acute Myeloid Leukemia)
-            - **CLL** (Chronic Lymphocytic Leukemia)
-            - **CML** (Chronic Myeloid Leukemia)
+                ### About This Application
+                This Streamlit application provides a complete pipeline for leukemia diagnosis:
+                - **Data Processing**: Load and preprocess GEO dataset GSE13164
+                - **EDA**: Explore gene expression patterns
+                - **Model Training**: Train and compare multiple ML models
+                - **Diagnosis**: Classify leukemia types from gene expression data
+                
+                ### Leukemia Types
+                - **ALL** (Acute Lymphoblastic Leukemia)
+                - **AML** (Acute Myeloid Leukemia)
+                - **CLL** (Chronic Lymphocytic Leukemia)
+                - **CML** (Chronic Myeloid Leukemia)
             """)
         
         with col2:
             st.markdown("""
-            ### Features
-            
-            ✅ Automatic GEO data download & processing
-            
-            ✅ Gene expression analysis
-            
-            ✅ Multiple ML model comparison
-            
-            ✅ Real-time predictions
-            
-            ✅ Interactive visualizations
-            
-            ### Dataset Information
-            
-            - **Source**: GEO (Gene Expression Omnibus)
-            - **Accession**: GSE13164
-            - **Features**: Gene expression levels
-            - **Classes**: 4 leukemia types
+                ### Features
+                - Automatic GEO data download & processing
+                - Gene expression analysis
+                - Multiple ML model comparison
+                - Real-time predictions
+                - Interactive visualizations
+                
+                ### Dataset Information
+                - **Source**: GEO (Gene Expression Omnibus)
+                - **Accession**: GSE13164
+                - **Features**: Gene expression levels
+                - **Classes**: 4 leukemia types
             """)
         
         st.info("""
-        **Getting Started**: Navigate through the sidebar pages to load data, 
-        explore it, train models, and make predictions.
+            **Getting Started**: Navigate through the sidebar pages to load data, 
+            explore it, train models, and make predictions.
         """)
     
     # loading data page
     elif page == "Data Loading":
         st.markdown('<h2 class="section-header">Data Loading & Preprocessing</h2>', unsafe_allow_html=True)
-        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -408,27 +361,27 @@ def main():
                 if use_local:
                     features_df, labels_df, le = load_local_data()
                     if features_df is not None:
-                        st.success("✅ Local data loaded successfully!")
+                        st.success("Local data loaded successfully!")
                     else:
                         st.info("No local data found. Attempting to download from GEO...")
                         features_df, labels_df, le = load_and_preprocess_geo(GSE_ID)
                         if features_df is not None:
                             features_df.to_csv(FEATURE)
                             labels_df.to_csv(LABEL, index=False)
-                            st.success("✅ Data downloaded and processed!")
+                            st.success("Data downloaded and processed!")
                 else:
                     features_df, labels_df, le = load_and_preprocess_geo(GSE_ID)
                     if features_df is not None:
                         features_df.to_csv(FEATURE)
                         labels_df.to_csv(LABEL, index=False)
-                        st.success("✅ Data downloaded and processed!")
+                        st.success("Data downloaded and processed!")
                 
                 if features_df is not None:
                     st.session_state.features_df = features_df
                     st.session_state.labels_df = labels_df
                     st.session_state.le = le
         
-        # Display loaded data info
+        # show loaded data info
         if 'features_df' in st.session_state:
             st.markdown("### Dataset Summary")
             features_df = st.session_state.features_df
@@ -442,11 +395,9 @@ def main():
             
             st.markdown("### Data Preview")
             tab1, tab2 = st.tabs(["Features", "Labels"])
-            
             with tab1:
                 st.dataframe(features_df.head(10))
                 st.write(f"Shape: {features_df.shape}")
-            
             with tab2:
                 st.dataframe(labels_df.head(10))
         else:
@@ -455,7 +406,6 @@ def main():
     # eda page
     elif page == "Exploratory Analysis":
         st.markdown('<h2 class="section-header">Exploratory Data Analysis</h2>', unsafe_allow_html=True)
-        
         if 'features_df' not in st.session_state:
             st.error("Please load data first from the 'Data Loading' page.")
             return
@@ -463,62 +413,47 @@ def main():
         features_df = st.session_state.features_df
         labels_df = st.session_state.labels_df
         
-        # Class Distribution
+        # class
         st.markdown("### Class Distribution")
         fig1 = plot_class_distribution(labels_df)
         st.plotly_chart(fig1, use_container_width=True)
         
-        # Descriptive Statistics
+        # desc stats
         st.markdown("### Descriptive Statistics")
         col1, col2 = st.columns(2)
-        
         with col1:
             st.write("**Overall Gene Expression Statistics**")
             st.dataframe(features_df.describe())
-        
         with col2:
             st.write("**Statistics by Leukemia Type**")
-            combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(
-                features_df, how='inner'
-            )
+            combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(features_df, how='inner')
             for ltype in TARGET:
                 st.write(f"**{ltype}**")
                 type_data = combined_df[combined_df['Leukemia_Type'] == ltype].drop('Leukemia_Type', axis=1)
                 st.write(type_data.describe().loc[['mean', 'std', 'min', 'max']].iloc[:, :3])
         
-        # Gene Expression Distribution
+        # ge dist
         st.markdown("### Gene Expression Distribution")
         fig2 = plot_gene_expression_distribution(features_df)
         st.plotly_chart(fig2, use_container_width=True)
         
-        # Correlation Analysis
+        # corr analysis
         st.markdown("### Correlation Analysis")
         st.write("Computing correlations (this may take a moment)...")
-        
-        combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(
-            features_df, how='inner'
-        )
-        
+        combined_df = labels_df[['Sample_ID', 'Leukemia_Type']].set_index('Sample_ID').join(features_df, how='inner')
         selected_ltype = st.selectbox("Select Leukemia Type:", TARGET)
         type_data = combined_df[combined_df['Leukemia_Type'] == selected_ltype].drop('Leukemia_Type', axis=1)
         
-        # Select top genes by variance
+        # top genes by variance
         top_genes = type_data.var().nlargest(15).index.tolist()
         corr_matrix = type_data[top_genes].corr()
-        
-        fig = go.Figure(data=go.Heatmap(
-            z=corr_matrix.values,
-            x=top_genes,
-            y=top_genes,
-            colorscale='RdBu'
-        ))
+        fig = go.Figure(data=go.Heatmap(z=corr_matrix.values, x=top_genes, y=top_genes, colorscale='RdBu'))
         fig.update_layout(title=f'Gene Correlation Matrix - {selected_ltype} (Top 15 Genes)', height=600)
         st.plotly_chart(fig, use_container_width=True)
     
     # model training page
     elif page == "Model Training":
         st.markdown('<h2 class="section-header">Model Training & Comparison</h2>', unsafe_allow_html=True)
-        
         if 'features_df' not in st.session_state:
             st.error("Please load data first from the 'Data Loading' page.")
             return
@@ -527,20 +462,16 @@ def main():
         labels_df = st.session_state.labels_df
         le = st.session_state.le
         
-        # Prepare data
         X = features_df.values
         y = labels_df['Target_Code'].values
-        
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
         
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
         
         if st.button("Train All Models"):
-            with st.spinner("Training models... This may take a moment..."):
+            with st.spinner("Training models. This may take a moment..."):
                 models, predictions, metrics = train_models(
                     X_train_scaled, X_test_scaled, y_train, y_test
                 )
@@ -550,14 +481,12 @@ def main():
                 st.session_state.X_test = X_test
                 st.session_state.y_test = y_test
                 st.session_state.scaler = scaler
-                st.success("✅ Model training completed!")
+                st.success("Model training completed!")
         
         if 'metrics' in st.session_state:
             st.markdown("### Model Performance Comparison")
-            
             metrics = st.session_state.metrics
             
-            # Create comparison dataframe
             comparison_data = []
             for model_name, metric in metrics.items():
                 comparison_data.append({
@@ -571,11 +500,11 @@ def main():
             comparison_df = pd.DataFrame(comparison_data)
             st.dataframe(comparison_df, use_container_width=True)
             
-            # Visualizations
+            # visualization
             fig = plot_model_comparison(metrics)
             st.plotly_chart(fig, use_container_width=True)
             
-            # Best Model
+            # best model
             best_r2_idx = comparison_df['Test R²'].idxmax()
             best_mse_idx = comparison_df['Test MSE'].idxmin()
             
@@ -589,7 +518,7 @@ def main():
                          comparison_df.loc[best_mse_idx, 'Model'],
                          f"{comparison_df.loc[best_mse_idx, 'Test MSE']:.4f}")
             
-            # Individual Model Analysis
+            # models analysis
             st.markdown("### Individual Model Analysis")
             selected_model = st.selectbox("Select a model to analyze:", 
                                          list(st.session_state.metrics.keys()))
@@ -606,12 +535,11 @@ def main():
             fig = plot_predictions_vs_actual(y_test, y_pred, selected_model)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Click the 'Train All Models' button to start training.")
+            st.info("Click 'Train All Models' to start training.")
     
     # predictions page
     elif page == "Predictions & Diagnosis":
         st.markdown('<h2 class="section-header">Leukemia Diagnosis & Predictions</h2>', unsafe_allow_html=True)
-        
         if 'models' not in st.session_state:
             st.error("Please train models first from the 'Model Training' page.")
             return
@@ -619,37 +547,30 @@ def main():
         models = st.session_state.models
         y_test = st.session_state.y_test
         scaler = st.session_state.scaler
-        
-        # Select model
-        selected_model = st.selectbox("Select the model for diagnosis:", 
-                                     list(models.keys()))
-        
+        selected_model = st.selectbox("Select the model for diagnosis:", list(models.keys()))
         st.markdown(f"### Using {selected_model} Model")
         
-        # Classification Results
+        # classification result
         model = models[selected_model]
         X_test = st.session_state.X_test
         X_test_scaled = scaler.transform(X_test)
         y_pred = model.predict(X_test_scaled)
         y_pred_class = np.clip(np.round(y_pred), 0, 3).astype(int)
-        
         class_to_type = {0: 'ALL', 1: 'AML', 2: 'CLL', 3: 'CML'}
         y_test_types = [class_to_type[y] for y in y_test]
         y_pred_types = [class_to_type[y] for y in y_pred_class]
         
-        # Metrics
+        # metrics
         accuracy = accuracy_score(y_test, y_pred_class)
-        
         col1, col2, col3 = st.columns(3)
         col1.metric("Overall Accuracy", f"{accuracy:.2%}")
         col2.metric("Samples Tested", len(y_test))
         col3.metric("Correct Predictions", int(accuracy * len(y_test)))
         
-        # Confusion Matrix
+        # confusion matrix
         st.markdown("### Confusion Matrix")
         cm = confusion_matrix(y_test, y_pred_class)
         cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-        
         fig = go.Figure(data=go.Heatmap(
             z=cm_normalized,
             x=['ALL', 'AML', 'CLL', 'CML'],
@@ -666,7 +587,7 @@ def main():
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Classification Report
+        # classification report
         st.markdown("### Classification Report")
         report = classification_report(y_test, y_pred_class, 
                                       target_names=['ALL', 'AML', 'CLL', 'CML'],
@@ -674,9 +595,8 @@ def main():
         report_df = pd.DataFrame(report).transpose()
         st.dataframe(report_df)
         
-        # Sample Predictions
+        # sample predictions
         st.markdown("### Sample Predictions")
-        
         predictions_df = pd.DataFrame({
             'Sample Index': range(len(y_test)),
             'Actual Type': y_test_types,
@@ -685,23 +605,21 @@ def main():
             'Correct': [y_true == y_pred for y_true, y_pred in zip(y_test_types, y_pred_types)]
         })
         
-        # Filter options
+        # filter options
         col1, col2 = st.columns(2)
         with col1:
             show_all = st.checkbox("Show all predictions", value=False)
         with col2:
             show_errors = st.checkbox("Show only incorrect predictions", value=False)
-        
         display_df = predictions_df
         if show_errors:
             display_df = display_df[~display_df['Correct']]
-        
         if show_all:
             st.dataframe(display_df, use_container_width=True)
         else:
             st.dataframe(display_df.head(20), use_container_width=True)
         
-        # Accuracy by Type
+        # accuracy by type
         st.markdown("### Accuracy by Leukemia Type")
         accuracy_by_type = []
         for ltype in ['ALL', 'AML', 'CLL', 'CML']:
@@ -712,7 +630,6 @@ def main():
                 'Accuracy': type_acc,
                 'Samples': mask.sum()
             })
-        
         type_acc_df = pd.DataFrame(accuracy_by_type)
         fig = px.bar(type_acc_df, x='Leukemia Type', y='Accuracy',
                     title='Classification Accuracy by Leukemia Type',
